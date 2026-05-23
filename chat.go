@@ -81,6 +81,7 @@ func joinchatroom(roomid string, username string, password string) {
 }
 
 func startchat(roomid string, username string, password string) {
+	fmt.Println("\033[90mType :/quit to leave the room\033[0m")
 	rl, err := readline.NewEx(&readline.Config{
 		Prompt: "\033[36m>\033[0m ",
 	})
