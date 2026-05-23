@@ -62,6 +62,15 @@ chmod +x gosip
 ./gosip
 ```
 
+**Option 3 — go install:**
+```bash
+go install github.com/Bearcry55/gosip@latest
+```
+Then run:
+```bash
+gosip
+```
+
 ### Windows
 
 ```powershell
