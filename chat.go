@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 )
 
 func listeningtomsg(roomid string, username string, password string) {
@@ -23,7 +24,7 @@ func listeningtomsg(roomid string, username string, password string) {
                 continue
             }
 
-            sender, msg := parsemessage(Text)
+            sender,timestamp, msg := parsemessage(Text)
 
             if sender == username {
                 continue
@@ -38,7 +39,7 @@ func listeningtomsg(roomid string, username string, password string) {
             if decrypted == "" {
                 continue
             }
-            fmt.Printf("\n[%s]: %s\n> ", sender, decrypted)
+            fmt.Printf("\n[%s] \n[%s]: %s\n> ", timestamp,sender, decrypted)
         }
 
         response.Body.Close() // close before reconnecting
@@ -46,14 +47,16 @@ func listeningtomsg(roomid string, username string, password string) {
 }
 func sendmessages(roomid string, Text string, username string, password string) {
 	url := "https://ntfy.sh/" + roomid
-
+    timestamp := time.Now().Format("15:04")
 	var message string
 	if username == "system" {
-		message = fmt.Sprintf("system|%s", Text)
-	} else {
-		encrypted := EncryptMessage(Text, password)
-		message = fmt.Sprintf("%s|%s", username, encrypted)
-	}
+        // Included the timestamp into the system message format
+        message = fmt.Sprintf("system|%s|%s", timestamp, Text)
+    } else {
+        encrypted := EncryptMessage(Text, password)
+        // Updated to the requested format: username|timestamp|encrypted_text
+        message = fmt.Sprintf("%s|%s|%s", username, timestamp, encrypted)
+    }
 
 	messages := strings.NewReader(message)
 	response, err := http.Post(url, "text/plain", messages)
@@ -87,7 +90,7 @@ func startchat(roomid string, username string, password string) {
 		scanner.Scan()
 		text := scanner.Text()
 
-		if text == "exit" {
+		if text == ":/quit" {
 			sendmessages(roomid, "has left the room", "system", password)
 			fmt.Println("leaving room...")
 			break
@@ -101,10 +104,10 @@ func startchat(roomid string, username string, password string) {
 	}
 }
 
-func parsemessage(raw string) (string, string) {
-	parts := strings.SplitN(raw, "|", 2)
-	if len(parts) == 2 {
-		return parts[0], parts[1]
-	}
-	return "system", raw
+func parsemessage(raw string) (string, string, string) {
+    parts := strings.SplitN(raw, "|", 3)
+    if len(parts) == 3 {
+        return parts[0], parts[1], parts[2] // username, time, msg
+    }
+    return "system", "", raw
 }
