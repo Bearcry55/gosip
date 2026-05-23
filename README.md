@@ -55,13 +55,23 @@ go build -o gosip
 ./gosip
 ```
 
-**Option 2 — Download binary (Linux):**
+**Option 2 — Download binary:**
+
+Linux:
 ```bash
-wget https://github.com/Bearcry55/gosip/releases/latest/download/gosip
-chmod +x gosip
-./gosip
+wget https://github.com/Bearcry55/gosip/releases/latest/download/gosip-linux
+chmod +x gosip-linux
+./gosip-linux
 ```
 
+Mac:
+```bash
+wget https://github.com/Bearcry55/gosip/releases/latest/download/gosip-mac
+chmod +x gosip-mac
+./gosip-mac
+```
+
+Windows — download `gosip.exe` from:
 **Option 3 — go install:**
 ```bash
 go install github.com/Bearcry55/gosip@latest
