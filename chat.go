@@ -4,9 +4,10 @@ import (
 	"bufio"
 	"fmt"
 	"net/http"
-	"os"
+	
 	"strings"
 	"time"
+	"github.com/chzyer/readline"
 )
 
 func listeningtomsg(roomid string, username string, password string) {
@@ -80,19 +81,28 @@ func joinchatroom(roomid string, username string, password string) {
 }
 
 func startchat(roomid string, username string, password string) {
+	rl, err := readline.NewEx(&readline.Config{
+		Prompt: "\033[36m>\033[0m ",
+	})
+	if err != nil {
+		panic(err)
+	}
+	defer rl.Close()
+
 	go listeningtomsg(roomid, username, password)
 
-	scanner := bufio.NewScanner(os.Stdin)
 	for {
-		fmt.Print("> ")
-		scanner.Scan()
-		text := scanner.Text()
+		text, err := rl.Readline()
+		if err != nil {
+			break
+		}
+		text = strings.TrimSpace(text)
 
-	if text == ":/quit" {
-    sendmessages(roomid, username + " has left the room", "system", password)
-    fmt.Println("leaving room...")
-    break
-}
+		if text == ":/quit" {
+			sendmessages(roomid, username+" has left the room", "system", password)
+			fmt.Println("leaving room...")
+			break
+		}
 
 		if text == "" {
 			continue
