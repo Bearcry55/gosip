@@ -88,11 +88,11 @@ func startchat(roomid string, username string, password string) {
 		scanner.Scan()
 		text := scanner.Text()
 
-		if text == ":/quit" {
-			sendmessages(roomid, "has left the room", "system", password)
-			fmt.Println("leaving room...")
-			break
-		}
+	if text == ":/quit" {
+    sendmessages(roomid, username + " has left the room", "system", password)
+    fmt.Println("leaving room...")
+    break
+}
 
 		if text == "" {
 			continue
