@@ -24,22 +24,20 @@ func listeningtomsg(roomid string, username string, password string) {
                 continue
             }
 
-            sender,timestamp, msg := parsemessage(Text)
-
-            if sender == username {
-                continue
-            }
-
-            if sender == "system" {
-                fmt.Printf("\n[system]: %s\n> ", msg)
-                continue
-            }
-
-            decrypted := DecryptMessage(msg, password)
-            if decrypted == "" {
-                continue
-            }
-            fmt.Printf("\n[%s] \n[%s]: %s\n> ", timestamp,sender, decrypted)
+            sender, timestamp, msg := parsemessage(Text)
+if sender == username {
+    continue
+}
+if sender == "system" {
+    fmt.Printf("\n\033[33m[system]\033[0m: %s\n> ", msg)
+    continue
+}
+decrypted := DecryptMessage(msg, password)
+if decrypted == "" {
+    continue
+}
+color := getcolor(sender)
+fmt.Printf("\n\033[90m[%s]\033[0m %s[%s]\033[0m: %s\n> ", timestamp, color, sender, decrypted)
         }
 
         response.Body.Close() // close before reconnecting
@@ -110,4 +108,33 @@ func parsemessage(raw string) (string, string, string) {
         return parts[0], parts[1], parts[2] // username, time, msg
     }
     return "system", "", raw
+}
+
+var colors = []string{
+    "\033[32m", // green
+    "\033[33m", // yellow
+    "\033[34m", // blue
+    "\033[35m", // magenta
+    "\033[36m", // cyan
+    "\033[91m", // bright red
+    "\033[92m", // bright green
+    "\033[93m", // bright yellow
+    "\033[94m", // bright blue
+    "\033[95m", // bright magenta
+    "\033[96m", // bright cyan
+    "\033[97m", // bright white
+}
+
+var userColors = map[string]string{}
+var reset = "\033[0m"
+
+func getcolor(username string) string {
+    if _, exists := userColors[username]; !exists {
+        total := 0
+        for _, c := range username {
+            total += int(c)
+        }
+        userColors[username] = colors[total%len(colors)]
+    }
+    return userColors[username]
 }
