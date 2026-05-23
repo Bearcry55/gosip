@@ -65,19 +65,45 @@ func sendmessages(roomid string, Text string, username string, password string) 
 	}
 	defer response.Body.Close()
 }
-
 func joinchatroom(roomid string, username string, password string) {
-	fmt.Println("trying to join the room wait a sec.....")
-	url  := "https://ntfy.sh/" + roomid
-	body := strings.NewReader("system|joined|" + username)
-	resp, err := http.Post(url, "text/plain", body)
-	if err != nil {
-		fmt.Println("there is error joining the room")
-		return
-	}
-	defer resp.Body.Close()
-	fmt.Println("you have successfully joined in this chat room:", roomid)
-	startchat(roomid, username, password)
+    fmt.Println("checking if room exists...")
+
+    // poll existing messages
+    resp, err := http.Get("https://ntfy.sh/" + roomid + "/raw?poll=1")
+    if err != nil {
+        fmt.Println("error connecting")
+        return
+    }
+    defer resp.Body.Close()
+
+    // read all existing messages
+    scanner := bufio.NewScanner(resp.Body)
+    found := false
+    for scanner.Scan() {
+        line := scanner.Text()
+        if strings.Contains(line, "created the room") {
+            found = true
+            break
+        }
+    }
+
+    if !found {
+        fmt.Println("\033[31mroom not found. check your room ID.\033[0m")
+        return
+    }
+
+    fmt.Println("room found! joining...")
+    url  := "https://ntfy.sh/" + roomid
+    body := strings.NewReader("system|joined|" + username)
+    r, err := http.Post(url, "text/plain", body)
+    if err != nil {
+        fmt.Println("error joining room")
+        return
+    }
+    defer r.Body.Close()
+
+    fmt.Println("you have successfully joined:", roomid)
+    startchat(roomid, username, password)
 }
 
 func startchat(roomid string, username string, password string) {
