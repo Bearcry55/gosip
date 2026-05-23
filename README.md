@@ -55,7 +55,7 @@ go build -o gosip
 ./gosip
 ```
 
-**Option 2 — Download binary:**
+**Option 2 — Download binary:(most recommeneded)**
 
 Linux:
 ```bash
