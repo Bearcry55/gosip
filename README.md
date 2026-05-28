@@ -54,6 +54,7 @@ If you are on Arch Linux or an Arch-based distribution, you can install `gosip` 
 
 ```bash
 yay -S gosip
+```
 ### Linux & Mac
 
 **Option 1 — Build from source:**
