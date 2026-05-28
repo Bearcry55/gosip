@@ -44,7 +44,16 @@ lion has joined!
 ---
 
 ## Installation
+---
 
+
+
+### Arch Linux (AUR)(recommended)
+
+If you are on Arch Linux or an Arch-based distribution, you can install `gosip` directly from the AUR using an AUR helper like `yay`:
+
+```bash
+yay -S gosip
 ### Linux & Mac
 
 **Option 1 — Build from source:**
@@ -55,7 +64,7 @@ go build -o gosip
 ./gosip
 ```
 
-**Option 2 — Download binary:(most recommeneded)**
+**Option 2 — Download binary:**
 
 Linux:
 ```bash
