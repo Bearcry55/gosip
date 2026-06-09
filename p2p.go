@@ -84,7 +84,10 @@ func startNode() (host.Host, error) {
 }
 
 func handlePeer(s network.Stream, username string, password string) {
+
 	addPeer(s)
+	
+	
 	defer func() {
 		removePeer(s)
 		s.Close()
@@ -137,9 +140,11 @@ func p2pCreateRoom(username string) {
 	defer h.Close()
 
 	// accept ALL incoming peers
-	h.SetStreamHandler(protocol, func(s network.Stream) {
-		go handlePeer(s, username, password)
-	})
+h.SetStreamHandler(protocol, func(s network.Stream) {
+    welcome := fmt.Sprintf("system|%s|room created by %s\n", time.Now().Format("15:04"), username)
+    _, _ = s.Write([]byte(welcome))
+    go handlePeer(s, username, password)
+})
 
 	var bestAddr string
 	for _, addr := range h.Addrs() {
@@ -219,7 +224,7 @@ func p2pJoinRoom(username string) {
 
 	// send join notification
 	joinMsg := fmt.Sprintf("system|%s|%s has joined!\n", time.Now().Format("15:04"), username)
-	_, _ = s.Write([]byte(joinMsg))
+	broadcast(joinMsg, nil)
 
 	// listen for incoming messages on outbound channel
 	go handlePeer(s, username, password)
