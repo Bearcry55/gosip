@@ -2,7 +2,7 @@
 
 > Anonymous encrypted terminal chat. No accounts. No logs. No trace.
 
-Gosip is a lightweight terminal-based chat app built in Go. Create a room, share the ID and password with a friend, and start chatting. Messages are encrypted end-to-end using AES-256. When you leave, it's gone.
+Gosip is a lightweight terminal-based chat app built in Go. Two modes — classic encrypted chat via ntfy.sh, or pure P2P with no server at all. When you leave, it's gone.
 
 ---
 
@@ -10,6 +10,9 @@ Gosip is a lightweight terminal-based chat app built in Go. Create a room, share
 
 - Anonymous — no accounts, no sign up
 - End-to-end encrypted with AES-256 GCM
+- Pure P2P mode — no server, no trace, direct connection
+- Simple invite code for P2P — no manual IP sharing
+- Group chat support in P2P mode
 - Auto-generated room passwords
 - Colored usernames in terminal
 - Timestamps on every message
@@ -33,18 +36,20 @@ Gosip is a lightweight terminal-based chat app built in Go. Create a room, share
 ....welcome to gosip the program is started ...
 1. create a CHAT ROOM
 2. enter a room with CHAT ROOM ID
-chose a option (1 or 2 ): 1
+3. pure P2P chat (no server)
+chose a option (1 or 2 or 3 ): 3
 
-give me a username you like : bear
-give me a roomid you like  : jungle
+username: bear
+1. create  2. join
+1
 
-Your room password: 344312
-Share this password with your friend privately!
+── share this invite code with your friends ──
+L2lwNC8xNzIuMTcuMC4xL3RjcC8zOTMzMS9wMnAvMTJEM...
+(copy the code above and share it privately)
+──────────────────────────────────────────────
+waiting for peers to connect...
 
-room created
-waiting for someone to join...
-lion has joined!
-
+[system]: lion has joined!
 > hey lion how are you man
 [16:32] [lion]: i am good bro
 > great to hear!
@@ -53,9 +58,6 @@ lion has joined!
 ---
 
 ## Installation
----
-
-
 
 ### Arch Linux (AUR)(recommended)
 
@@ -64,6 +66,7 @@ If you are on Arch Linux or an Arch-based distribution, you can install `gosip` 
 ```bash
 yay -S gosip
 ```
+
 ### Linux & Mac
 
 **Option 1 — Build from source:**
@@ -90,7 +93,6 @@ chmod +x gosip-mac
 ./gosip-mac
 ```
 
-Windows — download `gosip.exe` from:
 **Option 3 — go install:**
 ```bash
 go install github.com/Bearcry55/gosip@latest
@@ -109,6 +111,8 @@ go build -o gosip.exe
 ./gosip.exe
 ```
 
+Or download `gosip.exe` from the [releases page](https://github.com/Bearcry55/gosip/releases/latest).
+
 ---
 
 ## Requirements
@@ -119,6 +123,7 @@ go build -o gosip.exe
 
 ## How It Works
 
+### Classic Mode (options 1 & 2)
 ```
 Create Room  →  auto generates room ID + password
               →  POST system message to ntfy.sh
@@ -133,7 +138,20 @@ Messages     →  encrypted with AES-256 GCM before sending
               →  decrypted only by users with correct password
 ```
 
-Without the password anyone can see the room but only reads gibberish.
+### P2P Mode (option 3)
+```
+Create Room  →  start libp2p node
+              →  generate invite code (contains address + password)
+              →  wait for peers to connect
+
+Join Room    →  paste invite code
+              →  connect directly to creator
+              →  start chatting
+
+Messages     →  encrypted with AES-256 GCM
+              →  sent directly peer to peer
+              →  no server involved at any point
+```
 
 ---
 
@@ -150,7 +168,8 @@ Without the password anyone can see the room but only reads gibberish.
 - Messages are encrypted before leaving your machine
 - Room password never sent over the network
 - No user accounts or registration
-- Messages expire automatically on ntfy.sh after 12 hours
+- Classic mode: messages expire automatically on ntfy.sh after 12 hours
+- P2P mode: messages never touch any server
 - No message history stored locally
 
 ---
@@ -158,7 +177,8 @@ Without the password anyone can see the room but only reads gibberish.
 ## Built With
 
 - `Go` — core language
-- `ntfy.sh` — temporary message transport
+- `ntfy.sh` — temporary message transport (classic mode)
+- `github.com/libp2p/go-libp2p` — P2P networking
 - `crypto/aes` — AES-256 GCM encryption
 - `github.com/chzyer/readline` — terminal input handling
 
@@ -166,8 +186,10 @@ Without the password anyone can see the room but only reads gibberish.
 
 ## Roadmap
 
+- [x] Pure P2P mode with invite code
+- [x] Group chat in P2P mode
 - [ ] TUI interface
-- [ ] Room expiration control  
+- [ ] Room expiration control
 - [ ] File sharing
 - [ ] LAN mode (no internet needed)
 - [ ] Tor mode
