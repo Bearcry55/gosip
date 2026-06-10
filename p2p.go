@@ -14,16 +14,85 @@ import (
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/libp2p/go-libp2p/p2p/net/swarm"
 	"github.com/multiformats/go-multiaddr"
 )
 
 const protocol = "/gosip/1.0.0"
 
-// holds all connected peers
 var (
 	peers   []network.Stream
 	peersMu sync.Mutex
 )
+
+// public libp2p bootstrap nodes
+var bootstrapAddrs = []string{
+	"/dnsaddr/bootstrap.libp2p.io/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN",
+	"/dnsaddr/bootstrap.libp2p.io/p2p/QmQCU2EcMqAqQPR2i9bChDtGNJchTbq5TbXJJ16u19uLTa",
+	"/dnsaddr/bootstrap.libp2p.io/p2p/QmbLHAnMoJPWSCR5Zhtx6BHJX9KiKNN6tpvbUcqanj75Nb",
+	"/dnsaddr/bootstrap.libp2p.io/p2p/QmcZf59bWwK5XFi76CZX8cbJ4BhTzzA3gU1ZjYZcYW3dwt",
+}
+
+func getBootstrapPeers() []peer.AddrInfo {
+	var peers []peer.AddrInfo
+	for _, addr := range bootstrapAddrs {
+		ma, err := multiaddr.NewMultiaddr(addr)
+		if err != nil {
+			continue
+		}
+		pi, err := peer.AddrInfoFromP2pAddr(ma)
+		if err != nil {
+			continue
+		}
+		peers = append(peers, *pi)
+	}
+	return peers
+}
+
+func connectToBootstrap(ctx context.Context, h host.Host) {
+	bootstrap := getBootstrapPeers()
+	for _, p := range bootstrap {
+		go func(pi peer.AddrInfo) {
+			_ = h.Connect(ctx, pi)
+		}(p)
+	}
+}
+
+func startNode() (host.Host, error) {
+	bsPeers := getBootstrapPeers()
+
+	h, err := libp2p.New(
+		libp2p.NATPortMap(),
+		libp2p.EnableNATService(),
+		libp2p.EnableHolePunching(),
+		libp2p.EnableRelay(),
+		libp2p.EnableAutoRelayWithStaticRelays(bsPeers),
+	)
+	if err != nil {
+		return nil, err
+	}
+	return h, nil
+}
+
+func getBestAddr(h host.Host) string {
+	// prefer non-loopback, non-private addresses first (public IP)
+	for _, addr := range h.Addrs() {
+		full := addr.String() + "/p2p/" + h.ID().String()
+		if !strings.Contains(full, "127.0.0.1") &&
+			!strings.Contains(full, "192.168.") &&
+			!strings.Contains(full, "10.0.") {
+			return full
+		}
+	}
+	// fallback to any non-loopback
+	for _, addr := range h.Addrs() {
+		full := addr.String() + "/p2p/" + h.ID().String()
+		if !strings.Contains(full, "127.0.0.1") {
+			return full
+		}
+	}
+	return h.Addrs()[0].String() + "/p2p/" + h.ID().String()
+}
 
 func addPeer(s network.Stream) {
 	peersMu.Lock()
@@ -46,7 +115,6 @@ func broadcast(msg string, exclude network.Stream) {
 	peersMu.Lock()
 	defer peersMu.Unlock()
 	for _, p := range peers {
-		// Prevent echoing the message back to the original sender's peer identity
 		if exclude != nil && p.Conn().RemotePeer() == exclude.Conn().RemotePeer() {
 			continue
 		}
@@ -71,23 +139,8 @@ func decodeInviteCode(code string) (addrStr string, password string, err error) 
 	return string(decoded)[:idx], string(decoded)[idx+1:], nil
 }
 
-func startNode() (host.Host, error) {
-	h, err := libp2p.New(
-		libp2p.NATPortMap(),
-		libp2p.EnableNATService(),
-		libp2p.EnableHolePunching(),
-	)
-	if err != nil {
-		return nil, err
-	}
-	return h, nil
-}
-
 func handlePeer(s network.Stream, username string, password string) {
-
 	addPeer(s)
-	
-	
 	defer func() {
 		removePeer(s)
 		s.Close()
@@ -99,23 +152,14 @@ func handlePeer(s network.Stream, username string, password string) {
 		if line == "" {
 			continue
 		}
-
-		// BUG FIX: Check if we have already processed this exact message string
 		if isDuplicate(line) {
 			continue
 		}
-
-		// Relays incoming mesh data out to other connected peers 
 		broadcast(line+"\n", s)
-
 		sender, timestamp, msg := parsemessage(line)
-
-		// Safety filtering for duplicate display prevention
 		if sender == username {
 			continue
 		}
-
-		// UI Parsing & Delivery 
 		if sender == "system" {
 			fmt.Printf("\n\033[33m[system]\033[0m: %s\n> ", msg)
 			continue
@@ -130,6 +174,7 @@ func handlePeer(s network.Stream, username string, password string) {
 }
 
 func p2pCreateRoom(username string) {
+	ctx := context.Background()
 	password := generatepassword()
 
 	h, err := startNode()
@@ -139,26 +184,23 @@ func p2pCreateRoom(username string) {
 	}
 	defer h.Close()
 
-	// accept ALL incoming peers
-h.SetStreamHandler(protocol, func(s network.Stream) {
-    welcome := fmt.Sprintf("system|%s|room created by %s\n", time.Now().Format("15:04"), username)
-    _, _ = s.Write([]byte(welcome))
-    go handlePeer(s, username, password)
-})
+	// connect to bootstrap nodes
+	fmt.Println("connecting to network...")
+	connectToBootstrap(ctx, h)
 
-	var bestAddr string
-	for _, addr := range h.Addrs() {
-		full := addr.String() + "/p2p/" + h.ID().String()
-		if !strings.Contains(full, "127.0.0.1") {
-			bestAddr = full
-			break
-		}
-	}
-	if bestAddr == "" {
-		bestAddr = h.Addrs()[0].String() + "/p2p/" + h.ID().String()
-	}
+	// wait for node to discover public address
+	fmt.Println("discovering public address...")
+	time.Sleep(5 * time.Second)
 
+	h.SetStreamHandler(protocol, func(s network.Stream) {
+		welcome := fmt.Sprintf("system|%s|room created by %s\n", time.Now().Format("15:04"), username)
+		_, _ = s.Write([]byte(welcome))
+		go handlePeer(s, username, password)
+	})
+
+	bestAddr := getBestAddr(h)
 	code := generateInviteCode(bestAddr, password)
+
 	fmt.Println("\n── share this invite code with your friends ──")
 	fmt.Println(code)
 	fmt.Println("(copy the code above and share it privately)")
@@ -166,11 +208,11 @@ h.SetStreamHandler(protocol, func(s network.Stream) {
 	fmt.Println("waiting for peers to connect...")
 	fmt.Println("\033[90mType :/quit to leave\033[0m")
 
-	// creator sends messages too
 	p2pGroupSend(username, password)
 }
 
 func p2pJoinRoom(username string) {
+	ctx := context.Background()
 	reader := bufio.NewReader(os.Stdin)
 
 	fmt.Print("paste invite code: ")
@@ -190,7 +232,11 @@ func p2pJoinRoom(username string) {
 	}
 	defer h.Close()
 
-	// Allows clients that joined to listen to incoming broadcast streams from other peers
+	// connect to bootstrap nodes
+	fmt.Println("connecting to network...")
+	connectToBootstrap(ctx, h)
+	time.Sleep(3 * time.Second)
+
 	h.SetStreamHandler(protocol, func(s network.Stream) {
 		go handlePeer(s, username, password)
 	})
@@ -207,13 +253,26 @@ func p2pJoinRoom(username string) {
 		return
 	}
 
-	fmt.Println("connecting...")
-	if err := h.Connect(context.Background(), *peerInfo); err != nil {
-		fmt.Println("connection failed:", err)
+	// retry connection with backoff
+	fmt.Println("connecting to room...")
+	var connected bool
+	for i := 0; i < 3; i++ {
+		// clear backoff so libp2p retries
+		h.Network().(*swarm.Swarm).Backoff().Clear(peerInfo.ID)
+		if err := h.Connect(ctx, *peerInfo); err == nil {
+			connected = true
+			break
+		}
+		fmt.Printf("retrying... (%d/3)\n", i+1)
+		time.Sleep(2 * time.Second)
+	}
+
+	if !connected {
+		fmt.Println("connection failed. check the invite code or ask creator to resend.")
 		return
 	}
 
-	s, err := h.NewStream(context.Background(), peerInfo.ID, protocol)
+	s, err := h.NewStream(ctx, peerInfo.ID, protocol)
 	if err != nil {
 		fmt.Println("stream error:", err)
 		return
@@ -222,14 +281,10 @@ func p2pJoinRoom(username string) {
 	addPeer(s)
 	fmt.Println("connected!")
 
-	// send join notification
 	joinMsg := fmt.Sprintf("system|%s|%s has joined!\n", time.Now().Format("15:04"), username)
 	broadcast(joinMsg, nil)
 
-	// listen for incoming messages on outbound channel
 	go handlePeer(s, username, password)
-
-	// send messages
 	p2pGroupSend(username, password)
 }
 
@@ -254,37 +309,30 @@ func p2pGroupSend(username string, password string) {
 		if text == "" {
 			continue
 		}
-
 		timestamp := time.Now().Format("15:04")
 		encrypted := EncryptMessage(text, password)
 		msg := fmt.Sprintf("%s|%s|%s\n", username, timestamp, encrypted)
 		broadcast(msg, nil)
 	}
 }
+
 var (
 	seenMessages   = make(map[string]time.Time)
 	seenMessagesMu sync.Mutex
 )
 
-// isDuplicate returns true if the message was seen within the last 5 seconds
 func isDuplicate(msg string) bool {
 	seenMessagesMu.Lock()
 	defer seenMessagesMu.Unlock()
-
-	// Clean up old entries to prevent memory leaks
 	now := time.Now()
 	for k, t := range seenMessages {
 		if now.Sub(t) > 5*time.Second {
 			delete(seenMessages, k)
 		}
 	}
-
-	// Check if this exact string was handled recently
 	if _, found := seenMessages[msg]; found {
 		return true
 	}
-
-	// Mark as seen
 	seenMessages[msg] = now
 	return false
 }
