@@ -11,9 +11,11 @@ import (
 	"time"
 
 	libp2p "github.com/libp2p/go-libp2p"
+	dht "github.com/libp2p/go-libp2p-kad-dht"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/libp2p/go-libp2p/core/routing"
 	"github.com/libp2p/go-libp2p/p2p/net/swarm"
 	"github.com/multiformats/go-multiaddr"
 )
@@ -25,7 +27,6 @@ var (
 	peersMu sync.Mutex
 )
 
-// public libp2p bootstrap nodes
 var bootstrapAddrs = []string{
 	"/dnsaddr/bootstrap.libp2p.io/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN",
 	"/dnsaddr/bootstrap.libp2p.io/p2p/QmQCU2EcMqAqQPR2i9bChDtGNJchTbq5TbXJJ16u19uLTa",
@@ -34,7 +35,7 @@ var bootstrapAddrs = []string{
 }
 
 func getBootstrapPeers() []peer.AddrInfo {
-	var peers []peer.AddrInfo
+	var result []peer.AddrInfo
 	for _, addr := range bootstrapAddrs {
 		ma, err := multiaddr.NewMultiaddr(addr)
 		if err != nil {
@@ -44,22 +45,15 @@ func getBootstrapPeers() []peer.AddrInfo {
 		if err != nil {
 			continue
 		}
-		peers = append(peers, *pi)
+		result = append(result, *pi)
 	}
-	return peers
+	return result
 }
 
-func connectToBootstrap(ctx context.Context, h host.Host) {
-	bootstrap := getBootstrapPeers()
-	for _, p := range bootstrap {
-		go func(pi peer.AddrInfo) {
-			_ = h.Connect(ctx, pi)
-		}(p)
-	}
-}
-
-func startNode() (host.Host, error) {
+func startNodeWithDHT(ctx context.Context) (host.Host, *dht.IpfsDHT, error) {
 	bsPeers := getBootstrapPeers()
+
+	var kadDHT *dht.IpfsDHT
 
 	h, err := libp2p.New(
 		libp2p.NATPortMap(),
@@ -67,31 +61,41 @@ func startNode() (host.Host, error) {
 		libp2p.EnableHolePunching(),
 		libp2p.EnableRelay(),
 		libp2p.EnableAutoRelayWithStaticRelays(bsPeers),
+		libp2p.Routing(func(h host.Host) (routing.PeerRouting, error) {
+			var err error
+			kadDHT, err = dht.New(ctx, h, dht.Mode(dht.ModeAuto))
+			return kadDHT, err
+		}),
 	)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return h, nil
+	return h, kadDHT, nil
 }
 
-func getBestAddr(h host.Host) string {
-	// prefer non-loopback, non-private addresses first (public IP)
-	for _, addr := range h.Addrs() {
-		full := addr.String() + "/p2p/" + h.ID().String()
-		if !strings.Contains(full, "127.0.0.1") &&
-			!strings.Contains(full, "192.168.") &&
-			!strings.Contains(full, "10.0.") {
-			return full
-		}
+func connectToBootstrap(ctx context.Context, h host.Host) {
+	for _, p := range getBootstrapPeers() {
+		go func(pi peer.AddrInfo) {
+			_ = h.Connect(ctx, pi)
+		}(p)
 	}
-	// fallback to any non-loopback
-	for _, addr := range h.Addrs() {
-		full := addr.String() + "/p2p/" + h.ID().String()
-		if !strings.Contains(full, "127.0.0.1") {
-			return full
-		}
+}
+
+func generateInviteCode(peerID string, password string) string {
+	raw := peerID + ":" + password
+	return base64.StdEncoding.EncodeToString([]byte(raw))
+}
+
+func decodeInviteCode(code string) (peerID string, password string, err error) {
+	decoded, err := base64.StdEncoding.DecodeString(code)
+	if err != nil {
+		return "", "", err
 	}
-	return h.Addrs()[0].String() + "/p2p/" + h.ID().String()
+	idx := strings.LastIndex(string(decoded), ":")
+	if idx == -1 {
+		return "", "", fmt.Errorf("invalid code")
+	}
+	return string(decoded)[:idx], string(decoded)[idx+1:], nil
 }
 
 func addPeer(s network.Stream) {
@@ -120,23 +124,6 @@ func broadcast(msg string, exclude network.Stream) {
 		}
 		_, _ = p.Write([]byte(msg))
 	}
-}
-
-func generateInviteCode(addrStr string, password string) string {
-	raw := addrStr + ":" + password
-	return base64.StdEncoding.EncodeToString([]byte(raw))
-}
-
-func decodeInviteCode(code string) (addrStr string, password string, err error) {
-	decoded, err := base64.StdEncoding.DecodeString(code)
-	if err != nil {
-		return "", "", err
-	}
-	idx := strings.LastIndex(string(decoded), ":")
-	if idx == -1 {
-		return "", "", fmt.Errorf("invalid code")
-	}
-	return string(decoded)[:idx], string(decoded)[idx+1:], nil
 }
 
 func handlePeer(s network.Stream, username string, password string) {
@@ -177,20 +164,27 @@ func p2pCreateRoom(username string) {
 	ctx := context.Background()
 	password := generatepassword()
 
-	h, err := startNode()
+	fmt.Println("starting node...")
+	h, kadDHT, err := startNodeWithDHT(ctx)
 	if err != nil {
 		fmt.Println("error starting node:", err)
 		return
 	}
 	defer h.Close()
 
-	// connect to bootstrap nodes
+	// connect to bootstrap
 	fmt.Println("connecting to network...")
 	connectToBootstrap(ctx, h)
 
-	// wait for node to discover public address
+	// bootstrap DHT
+	fmt.Println("bootstrapping DHT...")
+	if err := kadDHT.Bootstrap(ctx); err != nil {
+		fmt.Println("DHT bootstrap error:", err)
+	}
+
+	// wait for DHT and NAT to be ready
 	fmt.Println("discovering public address...")
-	time.Sleep(5 * time.Second)
+	time.Sleep(6 * time.Second)
 
 	h.SetStreamHandler(protocol, func(s network.Stream) {
 		welcome := fmt.Sprintf("system|%s|room created by %s\n", time.Now().Format("15:04"), username)
@@ -198,8 +192,8 @@ func p2pCreateRoom(username string) {
 		go handlePeer(s, username, password)
 	})
 
-	bestAddr := getBestAddr(h)
-	code := generateInviteCode(bestAddr, password)
+	// invite code now contains peer ID only — no IP
+	code := generateInviteCode(h.ID().String(), password)
 
 	fmt.Println("\n── share this invite code with your friends ──")
 	fmt.Println(code)
@@ -219,47 +213,56 @@ func p2pJoinRoom(username string) {
 	code, _ := reader.ReadString('\n')
 	code = strings.TrimSpace(code)
 
-	addrStr, password, err := decodeInviteCode(code)
+	peerIDStr, password, err := decodeInviteCode(code)
 	if err != nil {
 		fmt.Println("invalid invite code")
 		return
 	}
 
-	h, err := startNode()
+	targetID, err := peer.Decode(peerIDStr)
+	if err != nil {
+		fmt.Println("invalid peer ID:", err)
+		return
+	}
+
+	fmt.Println("starting node...")
+	h, kadDHT, err := startNodeWithDHT(ctx)
 	if err != nil {
 		fmt.Println("error starting node:", err)
 		return
 	}
 	defer h.Close()
 
-	// connect to bootstrap nodes
 	fmt.Println("connecting to network...")
 	connectToBootstrap(ctx, h)
-	time.Sleep(3 * time.Second)
+
+	fmt.Println("bootstrapping DHT...")
+	if err := kadDHT.Bootstrap(ctx); err != nil {
+		fmt.Println("DHT bootstrap error:", err)
+	}
+
+	// wait for DHT to be ready
+	time.Sleep(8 * time.Second)
 
 	h.SetStreamHandler(protocol, func(s network.Stream) {
 		go handlePeer(s, username, password)
 	})
 
-	maddr, err := multiaddr.NewMultiaddr(addrStr)
+	// look up peer addresses from DHT
+	fmt.Println("looking up peer on DHT...")
+	peerInfo, err := kadDHT.FindPeer(ctx, targetID)
 	if err != nil {
-		fmt.Println("invalid address:", err)
-		return
+		fmt.Println("peer not found on DHT:", err)
+		fmt.Println("trying direct connection anyway...")
+		peerInfo = peer.AddrInfo{ID: targetID}
 	}
 
-	peerInfo, err := peer.AddrInfoFromP2pAddr(maddr)
-	if err != nil {
-		fmt.Println("invalid peer info:", err)
-		return
-	}
-
-	// retry connection with backoff
+	// clear backoff and attempt connection with retries
 	fmt.Println("connecting to room...")
 	var connected bool
 	for i := 0; i < 3; i++ {
-		// clear backoff so libp2p retries
-		h.Network().(*swarm.Swarm).Backoff().Clear(peerInfo.ID)
-		if err := h.Connect(ctx, *peerInfo); err == nil {
+		h.Network().(*swarm.Swarm).Backoff().Clear(targetID)
+		if err := h.Connect(ctx, peerInfo); err == nil {
 			connected = true
 			break
 		}
@@ -268,11 +271,11 @@ func p2pJoinRoom(username string) {
 	}
 
 	if !connected {
-		fmt.Println("connection failed. check the invite code or ask creator to resend.")
+		fmt.Println("connection failed. make sure creator is online and try again.")
 		return
 	}
 
-	s, err := h.NewStream(ctx, peerInfo.ID, protocol)
+	s, err := h.NewStream(ctx, targetID, protocol)
 	if err != nil {
 		fmt.Println("stream error:", err)
 		return
