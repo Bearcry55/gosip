@@ -4,7 +4,10 @@ import (
 	"bufio"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"strings"
 	"sync"
@@ -51,28 +54,37 @@ func getBootstrapPeers() []peer.AddrInfo {
 }
 
 func startNodeWithDHT(ctx context.Context) (host.Host, *dht.IpfsDHT, error) {
-	bsPeers := getBootstrapPeers()
+    bsPeers := getBootstrapPeers()
+    var kadDHT *dht.IpfsDHT
 
-	var kadDHT *dht.IpfsDHT
-
-	h, err := libp2p.New(
-		libp2p.NATPortMap(),
-		libp2p.EnableNATService(),
-		libp2p.EnableHolePunching(),
-		libp2p.EnableRelay(),
-		libp2p.EnableAutoRelayWithStaticRelays(bsPeers),
-		libp2p.Routing(func(h host.Host) (routing.PeerRouting, error) {
-			var err error
-			kadDHT, err = dht.New(ctx, h, dht.Mode(dht.ModeAuto))
-			return kadDHT, err
-		}),
-	)
-	if err != nil {
-		return nil, nil, err
-	}
-	return h, kadDHT, nil
+    h, err := libp2p.New(
+        // 1. Explicitly bind to standard ports to help with NAT mapping
+        libp2p.ListenAddrStrings(
+            "/ip4/0.0.0.0/tcp/4001",
+            "/ip4/0.0.0.0/udp/4001/quic-v1",
+        ),
+        libp2p.NATPortMap(),
+        libp2p.EnableNATService(),
+        libp2p.EnableHolePunching(),
+        
+        // 2. CRITICAL: Force the app to scan for and use public relays 
+        // because Termux cannot discover its own public routing data natively
+        libp2p.EnableRelay(),
+        libp2p.EnableAutoRelayWithStaticRelays(bsPeers),
+        libp2p.ForceReachabilityPrivate(), // Forces node to look for relays immediately
+        
+        libp2p.Routing(func(h host.Host) (routing.PeerRouting, error) {
+            var err error
+            // ModeClient bypasses the netlink permission error by not trying to act as a DHT server
+            kadDHT, err = dht.New(ctx, h, dht.Mode(dht.ModeClient))
+            return kadDHT, err
+        }),
+    )
+    if err != nil {
+        return nil, nil, err
+    }
+    return h, kadDHT, nil
 }
-
 func connectToBootstrap(ctx context.Context, h host.Host) {
 	for _, p := range getBootstrapPeers() {
 		go func(pi peer.AddrInfo) {
@@ -81,12 +93,79 @@ func connectToBootstrap(ctx context.Context, h host.Host) {
 	}
 }
 
-func generateInviteCode(peerID string, password string) string {
-	raw := peerID + ":" + password
+// peerMeta is what we publish to ntfy.sh
+type peerMeta struct {
+	PeerID string   `json:"peer_id"`
+	Addrs  []string `json:"addrs"`
+}
+
+func publishToNtfy(channel string, h host.Host) error {
+    var addrs []string
+    for _, addr := range h.Addrs() {
+        addrStr := addr.String()
+        
+        // Skip local loopback completely as it's useless over the internet
+        if strings.Contains(addrStr, "127.0.0.1") || strings.Contains(addrStr, "::1") {
+            continue
+        }
+        
+        full := addrStr + "/p2p/" + h.ID().String()
+        addrs = append(addrs, full)
+    }
+
+    meta := peerMeta{
+        PeerID: h.ID().String(),
+        Addrs:  addrs,
+    }
+
+    data, err := json.Marshal(meta)
+    if err != nil {
+        return err
+    }
+
+    url := "https://ntfy.sh/" + channel
+    resp, err := http.Post(url, "application/json", strings.NewReader(string(data)))
+    if err != nil {
+        return err
+    }
+    defer resp.Body.Close()
+    return nil
+}
+// fetchFromNtfy reads creator's peer info from ntfy.sh channel
+func fetchFromNtfy(channel string) (*peerMeta, error) {
+	url := "https://ntfy.sh/" + channel + "/raw?poll=1"
+	resp, err := http.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	// find the last valid JSON line
+	lines := strings.Split(strings.TrimSpace(string(body)), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if line == "" {
+			continue
+		}
+		var meta peerMeta
+		if err := json.Unmarshal([]byte(line), &meta); err == nil {
+			return &meta, nil
+		}
+	}
+	return nil, fmt.Errorf("no valid peer info found")
+}
+
+func generateInviteCode(channel string, password string) string {
+	raw := channel + ":" + password
 	return base64.StdEncoding.EncodeToString([]byte(raw))
 }
 
-func decodeInviteCode(code string) (peerID string, password string, err error) {
+func decodeInviteCode(code string) (channel string, password string, err error) {
 	decoded, err := base64.StdEncoding.DecodeString(code)
 	if err != nil {
 		return "", "", err
@@ -164,6 +243,9 @@ func p2pCreateRoom(username string) {
 	ctx := context.Background()
 	password := generatepassword()
 
+	// random ntfy channel for discovery
+	channel := "gosip-" + generatepassword()
+
 	fmt.Println("starting node...")
 	h, kadDHT, err := startNodeWithDHT(ctx)
 	if err != nil {
@@ -172,19 +254,31 @@ func p2pCreateRoom(username string) {
 	}
 	defer h.Close()
 
-	// connect to bootstrap
 	fmt.Println("connecting to network...")
 	connectToBootstrap(ctx, h)
 
-	// bootstrap DHT
 	fmt.Println("bootstrapping DHT...")
-	if err := kadDHT.Bootstrap(ctx); err != nil {
-		fmt.Println("DHT bootstrap error:", err)
+	_ = kadDHT.Bootstrap(ctx)
+
+	// wait for addresses to be discovered
+	fmt.Println("discovering addresses...")
+	time.Sleep(30 * time.Second)
+
+	// publish to ntfy.sh
+	fmt.Println("publishing location...")
+	if err := publishToNtfy(channel, h); err != nil {
+		fmt.Println("warning: failed to publish:", err)
+	} else {
+		fmt.Println("location published!")
 	}
 
-	// wait for DHT and NAT to be ready
-	fmt.Println("discovering public address...")
-	time.Sleep(6 * time.Second)
+	// keep republishing every 30s in background
+	go func() {
+		for {
+			time.Sleep(30 * time.Second)
+			_ = publishToNtfy(channel, h)
+		}
+	}()
 
 	h.SetStreamHandler(protocol, func(s network.Stream) {
 		welcome := fmt.Sprintf("system|%s|room created by %s\n", time.Now().Format("15:04"), username)
@@ -192,9 +286,7 @@ func p2pCreateRoom(username string) {
 		go handlePeer(s, username, password)
 	})
 
-	// invite code now contains peer ID only — no IP
-	code := generateInviteCode(h.ID().String(), password)
-
+	code := generateInviteCode(channel, password)
 	fmt.Println("\n── share this invite code with your friends ──")
 	fmt.Println(code)
 	fmt.Println("(copy the code above and share it privately)")
@@ -213,15 +305,9 @@ func p2pJoinRoom(username string) {
 	code, _ := reader.ReadString('\n')
 	code = strings.TrimSpace(code)
 
-	peerIDStr, password, err := decodeInviteCode(code)
+	channel, password, err := decodeInviteCode(code)
 	if err != nil {
 		fmt.Println("invalid invite code")
-		return
-	}
-
-	targetID, err := peer.Decode(peerIDStr)
-	if err != nil {
-		fmt.Println("invalid peer ID:", err)
 		return
 	}
 
@@ -237,28 +323,54 @@ func p2pJoinRoom(username string) {
 	connectToBootstrap(ctx, h)
 
 	fmt.Println("bootstrapping DHT...")
-	if err := kadDHT.Bootstrap(ctx); err != nil {
-		fmt.Println("DHT bootstrap error:", err)
-	}
+	_ = kadDHT.Bootstrap(ctx)
 
-	// wait for DHT to be ready
-	time.Sleep(8 * time.Second)
+	time.Sleep(20 * time.Second)
 
 	h.SetStreamHandler(protocol, func(s network.Stream) {
 		go handlePeer(s, username, password)
 	})
 
-	// look up peer addresses from DHT
-	fmt.Println("looking up peer on DHT...")
-	peerInfo, err := kadDHT.FindPeer(ctx, targetID)
-	if err != nil {
-		fmt.Println("peer not found on DHT:", err)
-		fmt.Println("trying direct connection anyway...")
-		peerInfo = peer.AddrInfo{ID: targetID}
+	// fetch creator addresses from ntfy.sh
+	fmt.Println("fetching creator location from ntfy.sh...")
+	var meta *peerMeta
+	for i := 0; i < 5; i++ {
+		meta, err = fetchFromNtfy(channel)
+		if err == nil {
+			break
+		}
+		fmt.Printf("retrying fetch... (%d/5)\n", i+1)
+		time.Sleep(2 * time.Second)
+	}
+	if meta == nil {
+		fmt.Println("failed to get creator location")
+		return
 	}
 
-	// clear backoff and attempt connection with retries
-	fmt.Println("connecting to room...")
+	fmt.Println("found creator! connecting...")
+
+	// build peer info from fetched addresses
+	targetID, err := peer.Decode(meta.PeerID)
+	if err != nil {
+		fmt.Println("invalid peer ID")
+		return
+	}
+
+	var maddrs []multiaddr.Multiaddr
+	for _, addrStr := range meta.Addrs {
+		ma, err := multiaddr.NewMultiaddr(addrStr)
+		if err != nil {
+			continue
+		}
+		maddrs = append(maddrs, ma)
+	}
+
+	peerInfo := peer.AddrInfo{
+		ID:    targetID,
+		Addrs: maddrs,
+	}
+
+	// connect with retries
 	var connected bool
 	for i := 0; i < 3; i++ {
 		h.Network().(*swarm.Swarm).Backoff().Clear(targetID)
@@ -266,12 +378,12 @@ func p2pJoinRoom(username string) {
 			connected = true
 			break
 		}
-		fmt.Printf("retrying... (%d/3)\n", i+1)
+		fmt.Printf("retrying connection... (%d/3)\n", i+1)
 		time.Sleep(2 * time.Second)
 	}
 
 	if !connected {
-		fmt.Println("connection failed. make sure creator is online and try again.")
+		fmt.Println("connection failed. make sure creator is online.")
 		return
 	}
 
