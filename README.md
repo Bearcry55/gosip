@@ -10,7 +10,7 @@ Gosip is a lightweight terminal-based chat app built in Go. Two modes — classi
 
 - Anonymous — no accounts, no sign up
 - End-to-end encrypted with AES-256 GCM
-- Pure P2P mode — no server, no trace, direct connection
+- Pure P2P mode — works across different networks (WiFi, mobile data)
 - Simple invite code for P2P — no manual IP sharing
 - Group chat support in P2P mode
 - Auto-generated room passwords
@@ -44,7 +44,7 @@ username: bear
 1
 
 ── share this invite code with your friends ──
-L2lwNC8xNzIuMTcuMC4xL3RjcC8zOTMzMS9wMnAvMTJEM...
+Z29zaXAtNzQ3MTI5OjQzOTUwNQ==
 (copy the code above and share it privately)
 ──────────────────────────────────────────────
 waiting for peers to connect...
@@ -140,13 +140,15 @@ Messages     →  encrypted with AES-256 GCM before sending
 
 ### P2P Mode (option 3)
 ```
-Create Room  →  start libp2p node
-              →  generate invite code (contains address + password)
+Create Room  →  start WebRTC node
+              →  publish address to ntfy.sh (signaling only)
+              →  generate invite code (channel + password)
               →  wait for peers to connect
 
 Join Room    →  paste invite code
-              →  connect directly to creator
-              →  start chatting
+              →  fetch creator address from ntfy.sh
+              →  connect directly via WebRTC
+              →  ntfy.sh no longer used after connection
 
 Messages     →  encrypted with AES-256 GCM
               →  sent directly peer to peer
@@ -169,7 +171,7 @@ Messages     →  encrypted with AES-256 GCM
 - Room password never sent over the network
 - No user accounts or registration
 - Classic mode: messages expire automatically on ntfy.sh after 12 hours
-- P2P mode: messages never touch any server
+- P2P mode: only connection address shared via ntfy.sh, messages never touch any server
 - No message history stored locally
 
 ---
@@ -177,8 +179,8 @@ Messages     →  encrypted with AES-256 GCM
 ## Built With
 
 - `Go` — core language
-- `ntfy.sh` — temporary message transport (classic mode)
-- `github.com/libp2p/go-libp2p` — P2P networking
+- `ntfy.sh` — temporary message transport (classic mode + P2P signaling)
+- `github.com/pion/webrtc` — WebRTC P2P networking
 - `crypto/aes` — AES-256 GCM encryption
 - `github.com/chzyer/readline` — terminal input handling
 
@@ -187,6 +189,7 @@ Messages     →  encrypted with AES-256 GCM
 ## Roadmap
 
 - [x] Pure P2P mode with invite code
+- [x] P2P works across different networks
 - [x] Group chat in P2P mode
 - [ ] TUI interface
 - [ ] Room expiration control
