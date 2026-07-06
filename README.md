@@ -1,8 +1,8 @@
 # 🤫 Gosip
 
 > Anonymous encrypted terminal chat. No accounts. No logs. No trace.
-> <img src="Screenshot_20260706_201609.png" alt="Gosip Terminal Logo" width="100%">
-<img src="pasted file.png" alt="Gosip P2P Connection in Action" width="100%">
+> <img src="Screenshot_20260706_201609.png" alt="Gosip Terminal Logo" width="40%">
+<img src="pasted file.png" alt="Gosip P2P Connection in Action" width="40%">
 
 Gosip is a lightweight terminal-based chat app built in Go. Two modes — classic encrypted chat via ntfy.sh, or pure P2P with no server at all. When you leave, it's gone.
 
